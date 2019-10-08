@@ -19,7 +19,7 @@ try:
     import pyfortiapi
     from requests import HTTPError
     from enum import Enum, unique, auto
-    from config import COGNITO_URL, COGNITO_TOKEN, FORTI_INFO, SRC_INTERFACE, DST_INTERFACE
+    from config import COGNITO_URL, COGNITO_TOKEN, FORTI_INFO
 except ImportError as error:
     sys.exit('\nMissing import requirements: {}\n'.format(str(error)))
 
@@ -37,8 +37,6 @@ class BlockType(Enum):
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-host_policy_name = 'Cognito Hosts'
-detection_policy_name = 'Cognito Detections'
 dst_group_name = 'Cognito Blocked Destinations'
 src_group_name = 'Cognito Blocked Sources'
 
@@ -125,8 +123,8 @@ def register_addresses(firewall, block_type, id, ip_list, tag):
                 raise HTTPError(address, 'Error retrieving address data')
 
 
-def get_cognito_group(firewall, block_type, ips):
-    """Get/Create address group for Cognito Policy based on block type"""
+def update_cognito_group(firewall, block_type, ips):
+    """Update/Create address group based on block type"""
     ip_list = []
     b_tag = get_cognito_tag(blocked=True)
 
@@ -162,104 +160,40 @@ def get_unique_policyid(firewall):
     return policy_id
 
 
-def create_cognito_policy(firewall, name, src='all', dst='all'):
-    """Template for Cognito Policy; either source or destination address group
-    should be specified
-    """
-    policy_id = get_unique_policyid(firewall)
-    data = json.dumps({'policyid': policy_id,
-                       'name': name,
-                       'srcintf': [{'name': SRC_INTERFACE}],
-                       'dstintf': [{'name': DST_INTERFACE}],
-                       'srcaddr': [{'name': src}],
-                       'dstaddr': [{'name': dst}],
-                       'action': 'deny',
-                       'status': 'enable',
-                       'schedule': 'always',
-                       'service': [{'name': 'ALL'}],
-                       'fsso': 'enable',
-                       'wsso': 'disable',
-                       'rsso': 'enable'})
-    firewall.create_firewall_policy(policy_id, data)
-    policy = firewall.get_firewall_policy(policy_id)[0]
-    logger.info('Firewall Policy \'%s\' created with id %s',
-                policy['name'], policy['policyid'])
-    return policy
-
-
 def block_ips(firewalls, block_type, ips):
     """Block a list of IP addresses, either as source IPs or
     destination IPs
     """
-    policy_name = host_policy_name if block_type == BlockType.SOURCE else detection_policy_name
     for firewall in firewalls:
-        group = get_cognito_group(firewall, block_type, ips)
-        policy = firewall.get_firewall_policy(policy_name)
-        if type(policy) == int:
-            if policy == 404:
-                if block_type == BlockType.SOURCE:
-                    create_cognito_policy(firewall, policy_name, src=group['name'])
-                elif block_type == BlockType.DESTINATION:
-                    create_cognito_policy(firewall, policy_name, dst=group['name'])
-            else:
-                raise HTTPError(policy, 'Error retrieving policy data')
-        else:
-            policy = policy[0]
-            default_address_group = {'name': 'all', 'q_origin_key': 'all'}
-            empty_address_group = {'name': 'none', 'q_origin_key': 'none'}
-
-            if block_type == BlockType.SOURCE and (default_address_group in policy['srcaddr'] or
-                                                   empty_address_group in policy['srcaddr']):
-                data = json.dumps({'srcaddr': [{'name': group['name']}]})
-                firewall.update_firewall_policy(policy['policyid'], data)
-                logger.debug('Group \'{}\' added to policy'.format(group['name']))
-            elif block_type == BlockType.DESTINATION and (default_address_group in policy['dstaddr'] or
-                                                          empty_address_group in policy['dstaddr']):
-                data = json.dumps({'dstaddr': [{'name': group['name']}]})
-                firewall.update_firewall_policy(policy['policyid'], data)
-                logger.debug('Group \'{}\' added to policy'.format(group['name']))
+        update_cognito_group(firewall, block_type, ips)
 
 
 def unblock_ips(firewalls, block_type, ips):
     """Unblock either source or destination IP addresses by removing
     them from the FortiGate firewall policy
     """
-    policy_name = host_policy_name if block_type == BlockType.SOURCE else detection_policy_name
     error_tag = 'not eligible to be unblocked'
-    addr_type = 'srcaddr' if block_type == BlockType.SOURCE else 'dstaddr'
+    group_name = src_group_name if block_type == BlockType.SOURCE else dst_group_name
     u_tag = get_cognito_tag(blocked=False)
     for firewall in firewalls:
-        policy = firewall.get_firewall_policy(policy_name)
-        if type(policy) == int:
-            for id, ip in ips.items():
-                update_tags(block_type, id, append=error_tag)
-        else:
-            policy = policy[0]
-            for group in policy[addr_type]:
-                group_name = group['name']
-                ip_list = firewall.get_address_group(group_name)[0]['member']
-                for id, ip_l in ips.items():
-                    tagged = contains_tag(block_type, id, 'Unblocked:manual')
-                    for ip in ip_l:
-                        try:
-                            ip_list.remove({'name': ip, 'q_origin_key': ip})
-                            if not tagged:  # only tag if IP is successfully deleted
-                                update_tags(block_type, id, append=u_tag)
-                                tagged = True
-                        except ValueError:  # IP wasn't blocked
-                            update_tags(block_type, id, append=error_tag)
+        ip_list = firewall.get_address_group(group_name)[0]['member']
+        for id, ip_l in ips.items():
+            tagged = contains_tag(block_type, id, 'Unblocked:manual')
+            for ip in ip_l:
+                try:
+                    ip_list.remove({'name': ip, 'q_origin_key': ip})
+                    if not tagged:  # only tag if IP is successfully deleted
+                        update_tags(block_type, id, append=u_tag)
+                        tagged = True
+                except ValueError:  # IP wasn't blocked
+                    update_tags(block_type, id, append=error_tag)
 
-                if len(ip_list) == 0:  # address group is now empty, delete it from policy
-                    data = json.dumps({addr_type: [{'name': 'none'}]})
-                    policy = firewall.get_firewall_policy(policy_name)[0]
-                    firewall.update_firewall_policy(policy['policyid'], data)
-                    firewall.delete_address_group(group_name)
-                else:
-                    data = json.dumps({'member': ip_list})
-                    firewall.update_address_group(group_name, data)
-                for id, ip_l in ips.items():
-                    for ip in ip_l:  # deregister ips from FortiGate
-                        firewall.delete_firewall_address(str(ip))
+        data = json.dumps({'member': ip_list})
+        firewall.update_address_group(group_name, data)
+
+        for id, ip_l in ips.items():
+            for ip in ip_l:  # deregister ips from FortiGate
+                firewall.delete_firewall_address(str(ip))
 
 
 def update_tags(block_type, id, append=False, remove=False):
