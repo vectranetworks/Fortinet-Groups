@@ -152,14 +152,6 @@ def update_cognito_group(firewall, block_type, ips):
     return firewall.get_address_group(group_name)[0]
 
 
-def get_unique_policyid(firewall):
-    """Returns a FortiGate policyid not currently in use"""
-    policy_id = len(firewall.get_firewall_policy()) + 1
-    while firewall.get_firewall_policy(policy_id) != 404:
-        policy_id += 1
-    return policy_id
-
-
 def block_ips(firewalls, block_type, ips):
     """Block a list of IP addresses, either as source IPs or
     destination IPs
