@@ -148,7 +148,6 @@ def update_cognito_group(firewall, block_type, ips):
         old_list = group[0]['member']
         if old_list and 'none' == old_list[0]['name']:
             old_list = []
-        logger.info(old_list)
         new_list = old_list + ip_list
         data = json.dumps({'member': new_list})
         firewall.update_address_group(group_name, data)
