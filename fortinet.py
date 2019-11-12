@@ -145,7 +145,11 @@ def update_cognito_group(firewall, block_type, ips):
         else:
             raise HTTPError(group, 'Error retrieving group data')
     else:
-        new_list = group[0]['member'] + ip_list
+        old_list = group[0]['member']
+        if old_list and 'none' == old_list[0]['name']:
+            old_list = []
+        logger.info(old_list)
+        new_list = old_list + ip_list
         data = json.dumps({'member': new_list})
         firewall.update_address_group(group_name, data)
 
@@ -179,6 +183,9 @@ def unblock_ips(firewalls, block_type, ips):
                         tagged = True
                 except ValueError:  # IP wasn't blocked
                     update_tags(block_type, id, append=error_tag)
+
+        if not ip_list:
+            ip_list = [{'name': 'none', 'q_origin_key': 'none'}]
 
         data = json.dumps({'member': ip_list})
         firewall.update_address_group(group_name, data)
