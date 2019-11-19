@@ -259,6 +259,7 @@ def block_detections(firewalls, tag, cognito_url):
     logger.info('Collecting detections to block with Tag: %s', tag)
     cognito_full_url = cognito_url + detection_search_uri
     params = {'query_string': 'detection.state:"active"' \
+                              ' AND NOT detection.is_triaged' \
                               ' AND detection.tags:"%s"' \
                              r' AND NOT detection.tags:unblocked\:manual' \
                              r' AND NOT detection.tags:blocked\:manual' % tag}
@@ -282,6 +283,7 @@ def block_detection_type(firewalls, detection_type, cognito_url):
     logger.info('Collecting detections with Detection Type: %s', detection_type)
     cognito_full_url = cognito_url + detection_search_uri
     params = {'query_string': 'detection.state:"active"'
+                              ' AND NOT detection.is_triaged' \
                               ' AND detection.detection_type:"%s"' \
                              r' AND NOT detection.tags:unblocked\:manual' \
                              r' AND NOT detection.tags:blocked\:manual' % detection_type}
