@@ -145,19 +145,14 @@ def update_cognito_group(firewall, block_type, ips):
         else:
             raise HTTPError(group, 'Error retrieving group data')
     else:
-        new_list = group[0]['member'] + ip_list
+        old_list = group[0]['member']
+        if old_list and 'none' == old_list[0]['name']:
+            old_list = []
+        new_list = old_list + ip_list
         data = json.dumps({'member': new_list})
         firewall.update_address_group(group_name, data)
 
     return firewall.get_address_group(group_name)[0]
-
-
-def get_unique_policyid(firewall):
-    """Returns a FortiGate policyid not currently in use"""
-    policy_id = len(firewall.get_firewall_policy()) + 1
-    while firewall.get_firewall_policy(policy_id) != 404:
-        policy_id += 1
-    return policy_id
 
 
 def block_ips(firewalls, block_type, ips):
@@ -187,6 +182,9 @@ def unblock_ips(firewalls, block_type, ips):
                         tagged = True
                 except ValueError:  # IP wasn't blocked
                     update_tags(block_type, id, append=error_tag)
+
+        if not ip_list:
+            ip_list = [{'name': 'none', 'q_origin_key': 'none'}]
 
         data = json.dumps({'member': ip_list})
         firewall.update_address_group(group_name, data)
@@ -248,11 +246,14 @@ def block_host_tc(firewalls, tc, cognito_url):
     cognito_full_url = cognito_url + host_search_uri
     params = {'query_string': 'host.state:"active"' \
                               ' AND host.threat:>=%s and host.certainty:>=%s' \
-                             r' AND NOT host.tags:unblocked\:manual' \
-                             r' AND NOT host.tags:blocked\:manual' % (tc[0], tc[1])}
+                             r' AND NOT host.tags:Unblocked\:manual' \
+                             r' AND NOT host.tags:Blocked\:tc' \
+                             r' AND NOT host.tags:Blocked\:manual' % (tc[0], tc[1])}
     hosts = poll_vectra(BlockType.SOURCE, cognito_full_url, params)
     if len(hosts) > 0:
         block_ips(firewalls, BlockType.SOURCE, hosts)
+        for host in hosts:
+            update_tags(BlockType.SOURCE, host, append='Blocked:tc')
     else:
         logger.info('No Hosts to block with given Threat and Certainty scores')
 
@@ -262,8 +263,8 @@ def block_detections(firewalls, tag, cognito_url):
     cognito_full_url = cognito_url + detection_search_uri
     params = {'query_string': 'detection.state:"active"' \
                               ' AND detection.tags:"%s"' \
-                             r' AND NOT detection.tags:unblocked\:manual' \
-                             r' AND NOT detection.tags:blocked\:manual' % tag}
+                             r' AND NOT detection.tags:Unblocked\:manual' \
+                             r' AND NOT detection.tags:Blocked\:manual' % tag}
     detections = poll_vectra(BlockType.DESTINATION, cognito_full_url, params)
     if len(detections) > 0:
         block_ips(firewalls, BlockType.DESTINATION, detections)
@@ -285,8 +286,8 @@ def block_detection_type(firewalls, detection_type, cognito_url):
     cognito_full_url = cognito_url + detection_search_uri
     params = {'query_string': 'detection.state:"active"'
                               ' AND detection.detection_type:"%s"' \
-                             r' AND NOT detection.tags:unblocked\:manual' \
-                             r' AND NOT detection.tags:blocked\:manual' % detection_type}
+                             r' AND NOT detection.tags:Unblocked\:manual' \
+                             r' AND NOT detection.tags:Blocked\:manual' % detection_type}
     detections = poll_vectra(BlockType.DESTINATION, cognito_full_url, params)
     if len(detections) > 0:
         block_ips(firewalls, BlockType.DESTINATION, detections)
