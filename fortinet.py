@@ -285,7 +285,7 @@ def block_detection_type(firewalls, detection_type, cognito_url):
     """Block all destinations from a specified detection type in Cognito"""
     logger.info('Collecting detections with Detection Type: %s', detection_type)
     cognito_full_url = cognito_url + detection_search_uri
-    params = {'query_string': 'detection.state:"active"'
+    params = {'query_string': 'detection.state:"active"' \
                               ' AND NOT detection.is_triaged' \
                               ' AND detection.detection_type:"%s"' \
                              r' AND NOT detection.tags:Unblocked\:manual' \
@@ -375,3 +375,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
