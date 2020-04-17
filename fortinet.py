@@ -34,47 +34,46 @@ class BlockType(Enum):
     DESTINATION = auto()
 
 
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+LOGGER = logging.getLogger(__name__)
 
-dst_group_name = 'Cognito Blocked Destinations'
-src_group_name = 'Cognito Blocked Sources'
+DST_GROUP_NAME = 'Cognito Blocked Destinations'
+SRC_GROUP_NAME = 'Cognito Blocked Sources'
 
-vectra_page_size = '200'
-host_search_uri = '/api/v2/search/hosts/'
-host_tag_uri = '/api/v2/tagging/host/'
-detection_search_uri = '/api/v2/search/detections/'
-detection_tag_uri = '/api/v2/tagging/detection/'
+PAGE_SIZE = '200'
+HOST_SEARCH_URI = '/api/v2/search/hosts/'
+HOST_TAG_URI = '/api/v2/tagging/host/'
+DETECTION_SEARCH_URI = '/api/v2/search/detections/'
+DETECTION_TAG_URI = '/api/v2/tagging/detection/'
 
-vectra_header = {
+VECTRA_HEADER = {
     'Content-Type': 'application/json',
     'Cache-Control': 'no-cache',
-    'Authorization': 'Token ' + COGNITO_TOKEN
+    'Authorization': 'Token {}'.format(COGNITO_TOKEN)
 }
 
-allowed_detection_categories = ['COMMAND & CONTROL', 'EXFILTRATION']
-alternate_detection_types = ['Hidden DNS Tunnel', 'Suspect Domain Activity', 'Suspicious HTTP',
+ALLOWED_DETECTION_CATEGORIES = ['COMMAND & CONTROL', 'EXFILTRATION']
+ALTERNATE_DETECTION_TYPES = ['Hidden DNS Tunnel', 'Suspect Domain Activity', 'Suspicious HTTP',
                              'Abnormal Ad Activity', 'Abnormal Web Activity']
 
 
 def contains_tag(block_type, id, c_tag):
-    uri = host_tag_uri if block_type == BlockType.SOURCE else detection_tag_uri
-    url = COGNITO_URL + uri + str(id)
-    tags = requests.get(url=url, headers=vectra_header, verify=False).json()['tags']
+    uri = HOST_TAG_URI if block_type == BlockType.SOURCE else DETECTION_TAG_URI
+    url = '{}{}{}'.format(COGNITO_URL, uri, str(id))
+    tags = requests.get(url=url, headers=VECTRA_HEADER, verify=False, timeout=10).json()['tags']
     return any(c_tag in tag for tag in tags)
 
 
-def poll_vectra(block_type, url, params=None, headers=vectra_header):
+def poll_vectra(block_type, url, params=None, headers=VECTRA_HEADER):
     """Retrieve data from Cognito"""
     if params is None:
         params = {}
-    params.update({'page_size': vectra_page_size})
-    response = requests.get(url, headers=headers, params=params, verify=False)
+    params.update({'page_size': PAGE_SIZE})
+    response = requests.get(url, headers=headers, params=params, verify=False, timeout=10)
     try:
         response.raise_for_status()
         results = response.json()['results']
     except (HTTPError, json.JSONDecodeError) as e:
-        logger.info('Unable to retrieve Cognito data')
+        LOGGER.info('Unable to retrieve Cognito data')
         raise e
 
     item_dict = {}
@@ -84,8 +83,8 @@ def poll_vectra(block_type, url, params=None, headers=vectra_header):
     elif block_type == BlockType.DESTINATION:
         for item in results:
             detection_category = item['detection_category']
-            if item['detection_category'] in allowed_detection_categories:
-                if item['detection_type'] in alternate_detection_types:
+            if item['detection_category'] in ALLOWED_DETECTION_CATEGORIES:
+                if item['detection_type'] in ALTERNATE_DETECTION_TYPES:
                     ip_list = []
                     for group in item['grouped_details']:
                         ip_list.extend(group['dst_ips'])
@@ -95,10 +94,10 @@ def poll_vectra(block_type, url, params=None, headers=vectra_header):
                     try:
                         item_dict.update({item['id']: item['summary']['dst_ips']})
                     except Exception:
-                        logger.info(
+                        LOGGER.info(
                             'Not able to block destinations for detection type: %s', item['detection_type'])
             else:
-                logger.info(
+                LOGGER.info(
                     'Detection Category \'%s\' not supported for this action', detection_category)
 
     return item_dict
@@ -115,7 +114,7 @@ def register_addresses(firewall, block_type, id, ip_list, tag):
                     {'name': ip, 'type': 'iprange', 'start-ip': ip, 'end-ip': ip})
                 firewall.create_firewall_address(ip, data)
                 address = firewall.get_firewall_address(ip)[0]
-                logger.debug('Address %s registered with FortiGate', address['name'])
+                LOGGER.debug('Address %s registered with FortiGate', address['name'])
                 if not tagged:  # only tag if new address is created, and only once
                     update_tags(block_type, id, append=tag)
                     tagged = True
@@ -133,7 +132,7 @@ def update_cognito_group(firewall, block_type, ips):
         for ip in ip_l:
             ip_list.append({'name': ip})
 
-    group_name = src_group_name if block_type == BlockType.SOURCE else dst_group_name
+    group_name = SRC_GROUP_NAME if block_type == BlockType.SOURCE else DST_GROUP_NAME
     group = firewall.get_address_group(group_name)
 
     if type(group) == int:
@@ -141,7 +140,7 @@ def update_cognito_group(firewall, block_type, ips):
             data = json.dumps({'name': group_name, 'member': ip_list})
             firewall.create_address_group(group_name, data)
             group = firewall.get_address_group(group_name)[0]
-            logger.debug('Address Group \'%s\' created', group['name'])
+            LOGGER.debug('Address Group \'%s\' created', group['name'])
         else:
             raise HTTPError(group, 'Error retrieving group data')
     else:
@@ -168,7 +167,7 @@ def unblock_ips(firewalls, block_type, ips):
     them from the FortiGate firewall policy
     """
     error_tag = 'not eligible to be unblocked'
-    group_name = src_group_name if block_type == BlockType.SOURCE else dst_group_name
+    group_name = SRC_GROUP_NAME if block_type == BlockType.SOURCE else DST_GROUP_NAME
     u_tag = get_cognito_tag(blocked=False)
     for firewall in firewalls:
         ip_list = firewall.get_address_group(group_name)[0]['member']
@@ -198,29 +197,33 @@ def update_tags(block_type, id, append=False, remove=False):
     """Add a tag to either a host or a detection in Cognito indicating that
     is has been blocked or unblocked on the firewall
     """
-    uri = host_tag_uri if block_type == BlockType.SOURCE else detection_tag_uri
-    url = COGNITO_URL + uri + str(id)
-    logger.debug('Update_tags url:%s', url)
-    tags = requests.get(url=url, headers=vectra_header, verify=False).json()['tags']
+    uri = HOST_TAG_URI if block_type == BlockType.SOURCE else DETECTION_TAG_URI
+    url = '{}{}{}'.format(COGNITO_URL, uri, str(id))
+    LOGGER.debug('Update_tags url:%s', url)
+    tags = requests.get(url=url, headers=VECTRA_HEADER, verify=False, timeout=10).json()['tags']
     if append:
         tags.append(append)
     if remove:
         tags.remove(remove)
     body = json.dumps({'tags': tags})
-    requests.patch(url=url, headers=vectra_header, data=body, verify=False)
+    requests.patch(url=url, headers=VECTRA_HEADER, data=body, verify=False, timeout=10)
 
 
 def get_cognito_tag(blocked=True):
     """Generate a tag for Cognito indicating that a host
     or detection has been blocked or unblocked
     """
-    return ('Blocked' if blocked else 'Unblocked') + ':manual ' + datetime.datetime.now().strftime('%Y-%d-%b %H:%M:%S')
+    time = datetime.datetime.now().strftime('%Y-%d-%b %H:%M:%S')
+    if blocked:
+        return 'Blocked:manual {}'.format(time)
+    else:
+        return 'Unblocked:manual {}'.format(time)
 
 
 def block_hosts(firewalls, tag, cognito_url):
     """Block all hosts with a specified tag in Cognito"""
-    logger.info('Collecting hosts to block with Tag: %s', tag)
-    cognito_full_url = cognito_url + host_search_uri
+    LOGGER.info('Collecting hosts to block with Tag: %s', tag)
+    cognito_full_url = '{}{}'.format(cognito_url, HOST_SEARCH_URI)
     params = {'query_string': 'host.state:"active"' \
                               ' AND host.tags:"%s"' \
                              r' AND NOT host.tags:unblocked\:manual' \
@@ -230,7 +233,7 @@ def block_hosts(firewalls, tag, cognito_url):
     if len(hosts) > 0:
         block_ips(firewalls, BlockType.SOURCE, hosts)
     else:
-        logger.info('No hosts to block from tag: %s', tag)
+        LOGGER.info('No hosts to block from tag: %s', tag)
     # get all hosts with 'tag', even unblockable ones (so tag can be removed)
     params = {'query_string': 'host.tags:"{}"'.format(tag)}
     hosts = poll_vectra(BlockType.SOURCE, cognito_full_url, params)
@@ -242,8 +245,8 @@ def block_host_tc(firewalls, tc, cognito_url):
     """Block all hosts with a Cognito threat and certainty score at or above
     the specified level
     """
-    logger.info('Collecting hosts with Threat:%s Certainty:%s', tc[0], tc[1])
-    cognito_full_url = cognito_url + host_search_uri
+    LOGGER.info('Collecting hosts with Threat:%s Certainty:%s', tc[0], tc[1])
+    cognito_full_url = '{}{}'.format(cognito_url, HOST_SEARCH_URI)
     params = {'query_string': 'host.state:"active"' \
                               ' AND host.threat:>=%s and host.certainty:>=%s' \
                              r' AND NOT host.tags:Unblocked\:manual' \
@@ -255,12 +258,12 @@ def block_host_tc(firewalls, tc, cognito_url):
         for host in hosts:
             update_tags(BlockType.SOURCE, host, append='Blocked:tc')
     else:
-        logger.info('No Hosts to block with given Threat and Certainty scores')
+        LOGGER.info('No Hosts to block with given Threat and Certainty scores')
 
 
 def block_detections(firewalls, tag, cognito_url):
-    logger.info('Collecting detections to block with Tag: %s', tag)
-    cognito_full_url = cognito_url + detection_search_uri
+    LOGGER.info('Collecting detections to block with Tag: %s', tag)
+    cognito_full_url = '{}{}'.format(cognito_url, DETECTION_SEARCH_URI)
     params = {'query_string': 'detection.state:"active"' \
                               ' AND NOT detection.is_triaged' \
                               ' AND detection.tags:"%s"' \
@@ -270,11 +273,11 @@ def block_detections(firewalls, tag, cognito_url):
     if len(detections) > 0:
         block_ips(firewalls, BlockType.DESTINATION, detections)
     else:
-        logger.info('No detections to block from tag: %s', tag)
+        LOGGER.info('No detections to block from tag: %s', tag)
     # get all detections with 'tag', even unblockable ones (so tag can be removed)
-    params = {'page_size': vectra_page_size, 'query_string': 'detection.tags:"{}"'.format(tag)}
+    params = {'page_size': PAGE_SIZE, 'query_string': 'detection.tags:"{}"'.format(tag)}
     try:
-        results = requests.get(cognito_full_url, headers=vectra_header, params=params, verify=False).json()['results']
+        results = requests.get(cognito_full_url, headers=VECTRA_HEADER, params=params, verify=False, timeout=10).json()['results']
         for detection in results:
             update_tags(BlockType.DESTINATION, detection['id'], remove=tag)
     except (HTTPError, json.JSONDecodeError):
@@ -283,8 +286,8 @@ def block_detections(firewalls, tag, cognito_url):
 
 def block_detection_type(firewalls, detection_type, cognito_url):
     """Block all destinations from a specified detection type in Cognito"""
-    logger.info('Collecting detections with Detection Type: %s', detection_type)
-    cognito_full_url = cognito_url + detection_search_uri
+    LOGGER.info('Collecting detections with Detection Type: %s', detection_type)
+    cognito_full_url = '{}{}'.format(cognito_url, DETECTION_SEARCH_URI)
     params = {'query_string': 'detection.state:"active"' \
                               ' AND NOT detection.is_triaged' \
                               ' AND detection.detection_type:"%s"' \
@@ -294,33 +297,33 @@ def block_detection_type(firewalls, detection_type, cognito_url):
     if len(detections) > 0:
         block_ips(firewalls, BlockType.DESTINATION, detections)
     else:
-        logger.info('No IPs to block with Detection Type: %s', detection_type)
+        LOGGER.info('No IPs to block with Detection Type: %s', detection_type)
 
 
 def unblock_hosts(firewalls, tag, cognito_url):
     """Unblock all hosts in Cognito with a specified tag"""
-    logger.info('Collecting hosts to unblock with Tag:%s', tag)
-    cognito_full_url = cognito_url + host_search_uri
+    LOGGER.info('Collecting hosts to unblock with Tag:%s', tag)
+    cognito_full_url = '{}{}'.format(cognito_url, HOST_SEARCH_URI)
     params = {'query_string': 'host.tags:"{}"'.format(tag)}
     hosts = poll_vectra(BlockType.SOURCE, cognito_full_url, params)
     if len(hosts) > 0:
         unblock_ips(firewalls, BlockType.SOURCE, hosts)
     else:
-        logger.info('No Hosts to unblock with tag: %s', tag)
+        LOGGER.info('No Hosts to unblock with tag: %s', tag)
     for host in hosts:
         update_tags(BlockType.SOURCE, host, remove=tag)
 
 
 def unblock_detections(firewalls, tag, cognito_url):
     """Unblock all destinations in Cognito with a specified tag in their detection page"""
-    logger.info('Collecting detections to unblock with Tag:%s', tag)
-    cognito_full_url = cognito_url + detection_search_uri
+    LOGGER.info('Collecting detections to unblock with Tag:%s', tag)
+    cognito_full_url = '{}{}'.format(cognito_url, DETECTION_SEARCH_URI)
     params = {'query_string': 'detection.tags:"{}"'.format(tag)}
     detections = poll_vectra(BlockType.DESTINATION, cognito_full_url, params)
     if len(detections) > 0:
         unblock_ips(firewalls, BlockType.DESTINATION, detections)
     else:
-        logger.info('No detections to unblock with tag: %s', tag)
+        LOGGER.info('No detections to unblock with tag: %s', tag)
     for detection in detections:
         update_tags(BlockType.DESTINATION, detection, remove=tag)
 
@@ -348,13 +351,14 @@ def config_args():
 
 
 def main():
+    logging.basicConfig(level=logging.INFO)
     args = config_args()
     try:
         firewalls = []
         for auth in FORTI_INFO:
             firewalls.append(pyfortiapi.FortiGate(auth['IP'], auth['USER'], auth['PASS']))
     except KeyError as e:
-        logger.error('Please configure firewall instances in config.py')
+        LOGGER.error('Please configure firewall instances in config.py')
         raise e
 
     url = COGNITO_URL
@@ -375,4 +379,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
