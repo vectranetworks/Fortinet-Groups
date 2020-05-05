@@ -332,8 +332,10 @@ def config_args():
     """Parse CLI arguments"""
     parser = argparse.ArgumentParser(description='Add or remove hosts from dynamic block list.',
                                      prefix_chars='-', formatter_class=argparse.RawTextHelpFormatter,
-                                     epilog='Example: fortinet.py https://vectra.local AAAAAAAA https://fortinetfw.local '
-                                     'admin **** --block_host_tag block')
+                                     epilog='Example: python3 fortinet.py --block_host_tag block_fw '
+                                            '--unblock_host_tag '
+                                            'unblock_fw --block_detection_type \'External Remote Access\''
+                                     )
     parser.add_argument('--block_host_tag', type=str, default=False,
                         help='Poll for tagged hosts to block, eg --block_host_tag block')
     parser.add_argument('--block_host_tc', type=int, nargs=2, default=False,
